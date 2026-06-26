@@ -1,0 +1,51 @@
+# Local full-stack run (P8): the C++ engine (gRPC) + the FastAPI gateway (REST).
+# Mirrors the production wiring but on one machine, so you can develop the UI against
+# a real backend.
+#
+#   docker compose up --build
+#   # gateway:  http://localhost:8000/docs
+#   # then run the UI:  cd web && NEXT_PUBLIC_GATEWAY_URL=http://localhost:8000 npm run dev
+#
+# To use your own (larger) corpus + embeddings, mount them over /data and set the
+# JOHO_* env vars below.
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+    # Optional: serve your own corpus instead of the baked-in SciFact one.
+    # volumes: [ "./data:/data:ro" ]
+    # environment: { JOHO_CORPUS: /data/your_corpus.tsv }
+    expose: ["50051"]
+    healthcheck:
+      test: ["CMD-SHELL", "ss -ltn | grep -q :50051 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    environment:
+      JOHO_ENGINE_ADDR: engine:50051
+      JOHO_DATASET_DIR: /data/beir_scifact_test
+      JOHO_ENABLE_DENSE: "1"
+      JOHO_ENABLE_RERANK: "0"   # cross-encoder is heavy on CPU; enable for quality runs
+    ports: ["8000:8000"]
+    depends_on:
+      engine:
+        condition: service_started
+
+  # Optional UI container. Usually nicer to run `npm run dev` on the host, but this
+  # makes `docker compose --profile ui up` give you the whole stack.
+  # web:
+  #   image: node:20-slim
+  #   working_dir: /web
+  #   profiles: ["ui"]
+  #   volumes: [ "./web:/web" ]
+  #   environment: { NEXT_PUBLIC_GATEWAY_URL: "http://localhost:8000" }
+  #   command: sh -c "npm install && npm run dev -- -H 0.0.0.0"
+  #   ports: ["3000:3000"]
+  #   depends_on: [ gateway ]

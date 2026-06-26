@@ -1,0 +1,16 @@
+# Keep the Docker build context small: exclude build artifacts, venvs, and node
+# modules. The Dockerfiles COPY only the specific files they need from data/.
+**/.venv/
+**/__pycache__/
+**/node_modules/
+**/.next/
+engine/build/
+engine/.cache/
+.git/
+**/*.bak
+# Large per-dataset artifacts we don't bake in (the Dockerfiles copy only the small
+# SciFact corpus + its embeddings explicitly).
+data/**/*.jsonl
+data/beir_nfcorpus_test/
+docs/
+*.md

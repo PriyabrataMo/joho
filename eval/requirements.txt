@@ -1,0 +1,10 @@
+# Python eval harness dependencies (P1).
+# Installed into an ISOLATED venv pulling from public PyPI — see setup_env.sh.
+#
+#   ir_datasets : one-line access to MS MARCO / BEIR corpora, queries, and the
+#                 human relevance judgments (qrels). Handles download + caching.
+#   ir_measures : computes the standard IR metrics (nDCG, MRR/RR, Recall, MAP)
+#                 from a TREC run file + qrels. Wraps pytrec_eval under the hood,
+#                 so our numbers are comparable to published baselines.
+ir_datasets>=0.5.5
+ir_measures>=0.3.3

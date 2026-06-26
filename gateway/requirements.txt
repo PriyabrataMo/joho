@@ -1,0 +1,14 @@
+# Joho gateway (P6) — FastAPI orchestrator for the retrieval funnel.
+# Pinned loosely; install from public PyPI (see setup_env.sh).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+grpcio>=1.62
+grpcio-tools>=1.62          # to generate the Python stubs from joho.proto
+numpy>=1.26
+
+# Optional ML stack — only needed when ENABLE_DENSE / ENABLE_RERANK are on. The
+# gateway degrades to lexical-only (BM25 via the engine) if these are absent.
+faiss-cpu>=1.8
+sentence-transformers>=2.7
+torch>=2.2

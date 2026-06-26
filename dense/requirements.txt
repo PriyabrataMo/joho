@@ -1,0 +1,12 @@
+# Dense-retrieval (P3) Python deps — kept separate from eval/requirements.txt so the
+# lexical grading venv stays lean. These two venvs only ever talk via TREC run files.
+#
+# Install: bash dense/setup_env.sh   (uses public PyPI explicitly)
+#
+# torch ships an arm64 build with the MPS backend, so embeddings run on Apple Silicon GPUs.
+# sentence-transformers pulls in transformers + tokenizers + huggingface_hub.
+# faiss-cpu is the ANN index (HNSW); we still keep an exact brute-force path for ground truth.
+torch>=2.2
+sentence-transformers>=2.7
+faiss-cpu>=1.8
+numpy>=1.26

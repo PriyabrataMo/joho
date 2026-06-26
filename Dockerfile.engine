@@ -1,0 +1,32 @@
+# Joho C++ engine + gRPC server (P8).
+# Multi-stage: a build stage with the gRPC/protobuf toolchain, then a slim runtime
+# with only the shared libraries the server needs. The result serves Search /
+# Autocomplete / Correct over gRPC on :50051.
+
+# ---- build stage ----
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake \
+      protobuf-compiler-grpc libgrpc++-dev libprotobuf-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY engine/ engine/
+COPY proto/ proto/
+RUN cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build engine/build -j --target joho_server joho_build joho_batch
+
+# ---- runtime stage ----
+FROM debian:bookworm-slim AS runtime
+# Runtime shared libs for gRPC/protobuf (the *.dev packages above pull these at build).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libgrpc++1.51 libprotobuf32 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/engine/build/joho_server /usr/local/bin/joho_server
+COPY --from=build /src/engine/build/joho_build  /usr/local/bin/joho_build
+# A small dataset is baked in so the demo runs with no external storage. Larger
+# corpora are pulled from GCS at startup (see deploy/gcs_sync.sh) instead.
+COPY data/beir_scifact_test/corpus.tsv /data/corpus.tsv
+ENV JOHO_CORPUS=/data/corpus.tsv JOHO_PORT=50051
+EXPOSE 50051
+# Use the in-RAM index by default (no prebuilt .joho baked in); swap to --index for mmap.
+CMD ["/bin/sh", "-c", "joho_server --corpus \"$JOHO_CORPUS\" --port \"$JOHO_PORT\""]

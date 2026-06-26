@@ -1,0 +1,41 @@
+# Joho FastAPI gateway (P8).
+# Talks gRPC to the engine container and runs the dense/fusion/rerank stages. The
+# bi-encoder (BGE-small) is prefetched at build time so cold starts don't pay the
+# download; the heavier cross-encoder downloads on first use only if rerank is on.
+
+FROM python:3.12-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps first (layer cached across code changes).
+COPY gateway/requirements.txt .
+RUN pip install --no-cache-dir --index-url https://pypi.org/simple/ -r requirements.txt \
+    && pip install --no-cache-dir grpcio-tools
+
+# Generate the gRPC stubs from the proto, then drop the proto + app code in.
+COPY proto/ /app/proto/
+COPY gateway/ /app/
+RUN python -m grpc_tools.protoc --proto_path=/app/proto \
+      --python_out=/app/joho_pb --grpc_python_out=/app/joho_pb /app/proto/joho.proto \
+    && touch /app/joho_pb/__init__.py \
+    && sed -i 's/^import joho_pb2 as/from . import joho_pb2 as/' /app/joho_pb/joho_pb2_grpc.py
+
+# A small dataset (corpus + precomputed BGE doc embeddings) is baked in for the demo.
+COPY data/beir_scifact_test/corpus.tsv /data/beir_scifact_test/corpus.tsv
+COPY data/beir_scifact_test/corpus_bge.npy /data/beir_scifact_test/corpus_bge.npy
+COPY data/beir_scifact_test/corpus_bge.ids.txt /data/beir_scifact_test/corpus_bge.ids.txt
+
+# Prefetch the bi-encoder so the first /search isn't a multi-hundred-MB download.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
+
+ENV JOHO_DATASET_DIR=/data/beir_scifact_test \
+    JOHO_ENGINE_ADDR=engine:50051 \
+    JOHO_ENABLE_DENSE=1 \
+    JOHO_ENABLE_RERANK=0 \
+    HF_HOME=/app/.hf \
+    PORT=8000
+EXPOSE 8000
+# Cloud Run injects $PORT; honor it.
+CMD ["/bin/sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]

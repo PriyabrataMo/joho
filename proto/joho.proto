@@ -1,0 +1,81 @@
+// Joho engine gRPC contract (P6).
+//
+// This file IS the interface between the C++ retrieval engine (the server) and the
+// Python FastAPI gateway (the client). gRPC + protobuf give us a typed, versioned,
+// language-neutral contract: C++ implements `service Joho`, Python generates a stub
+// from this same file, and neither side hand-writes serialization. The browser never
+// talks gRPC — the gateway translates these RPCs to plain JSON/REST for the UI.
+//
+// Regenerate stubs after editing:  bash scripts/gen_proto.sh
+syntax = "proto3";
+
+package joho;
+
+// The retrieval engine's services. The engine owns the lexical layer (BM25 over the
+// on-disk index) and the query-assist layer (autocomplete + spell correction). The
+// dense / fusion / re-rank stages live in the gateway, which calls Search to get the
+// lexical candidates and their text, then layers the ML stages on top.
+service Joho {
+  // First-stage lexical retrieval: BM25 over the inverted index.
+  rpc Search (SearchRequest) returns (SearchResponse);
+  // Prefix autocomplete (weighted trie).
+  rpc Autocomplete (AutocompleteRequest) returns (AutocompleteResponse);
+  // "Did you mean?" spell correction (SymSpell).
+  rpc Correct (CorrectRequest) returns (CorrectResponse);
+  // Liveness/metadata probe (doc count, index name) — used by health checks.
+  rpc Health (HealthRequest) returns (HealthResponse);
+}
+
+message SearchRequest {
+  string query = 1;
+  uint32 top_k = 2;          // results to return (default 1000 if 0)
+  bool include_text = 3;     // also return each hit's document text (for re-ranking)
+}
+
+message Hit {
+  string doc_id = 1;         // external document id
+  double bm25_score = 2;     // raw BM25 score from this engine
+  uint32 rank = 3;           // 1-based rank in the BM25 ordering
+  string text = 4;           // document text, only if include_text was set
+}
+
+message SearchResponse {
+  repeated Hit hits = 1;
+  double took_ms = 2;        // server-side query time
+}
+
+message AutocompleteRequest {
+  string prefix = 1;
+  uint32 k = 2;              // max completions (default 8 if 0)
+}
+
+message Completion {
+  string term = 1;
+  uint64 weight = 2;         // popularity (corpus frequency)
+}
+
+message AutocompleteResponse {
+  repeated Completion completions = 1;
+}
+
+message CorrectRequest {
+  string word = 1;
+  uint32 k = 2;              // max alternatives (default 5 if 0)
+}
+
+message CorrectResponse {
+  bool found = 1;            // false => nothing within the edit-distance budget
+  string term = 2;           // best correction (== word if already correct)
+  int32 distance = 3;        // edit distance of the best correction (0 = exact)
+  uint64 frequency = 4;      // corpus frequency of the best correction
+  repeated string alternatives = 5;  // other candidates, best-first
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  uint64 num_docs = 2;
+  string index_name = 3;
+  bool suggest_ready = 4;    // is the autocomplete/correct vocabulary loaded?
+}
