@@ -49,13 +49,17 @@ message AutocompleteRequest {
   uint32 k = 2;              // max completions (default 8 if 0)
 }
 
-message Completion {
+// Named CompletionItem (not Completion) to avoid colliding with the engine's own
+// joho::Completion struct (engine/include/joho/trie.hpp): the generated C++ lands in
+// namespace joho too, and server.cpp includes both. Field names stay term/weight, so
+// the Python gateway (which reads fields, not the message type name) is unaffected.
+message CompletionItem {
   string term = 1;
   uint64 weight = 2;         // popularity (corpus frequency)
 }
 
 message AutocompleteResponse {
-  repeated Completion completions = 1;
+  repeated CompletionItem completions = 1;
 }
 
 message CorrectRequest {

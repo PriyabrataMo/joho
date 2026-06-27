@@ -111,7 +111,7 @@ public:
                               joho::AutocompleteResponse* resp) override {
         const std::size_t k = req->k() ? req->k() : 8;
         for (const joho::Completion& c : suggest_.complete(req->prefix(), k)) {
-            joho::Completion* out = resp->add_completions();
+            joho::CompletionItem* out = resp->add_completions();
             out->set_term(c.term);
             out->set_weight(c.weight);
         }
