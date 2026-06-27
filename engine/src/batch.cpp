@@ -23,12 +23,14 @@
 //   ./joho_batch --corpus corpus.tsv --queries queries.tsv \
 //                --output run.txt --top-k 1000 --k1 0.9 --b 0.4 --tag joho-bm25
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "joho/bm25.hpp"
@@ -49,6 +51,7 @@ struct Options {
     double k1 = 0.9;                // matches BM25 defaults in bm25.hpp
     double b = 0.4;
     std::string tag = "joho-bm25";  // the run_tag column
+    std::size_t threads = 0;        // query-scoring threads; 0 => hardware_concurrency
 };
 
 void print_usage(const char* argv0) {
@@ -62,7 +65,8 @@ void print_usage(const char* argv0) {
         << "  --top-k    N      results per query             (default: 1000)\n"
         << "  --k1       F      BM25 k1                        (default: 0.9)\n"
         << "  --b        F      BM25 b                         (default: 0.4)\n"
-        << "  --tag      S      run tag in the run file        (default: joho-bm25)\n";
+        << "  --tag      S      run tag in the run file        (default: joho-bm25)\n"
+        << "  --threads  N      query-scoring threads          (default: all cores)\n";
 }
 
 // Tiny hand-rolled argument parser. Each flag below expects one value after it.
@@ -84,6 +88,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         else if (arg == "--k1") opt.k1 = std::stod(next("--k1"));
         else if (arg == "--b") opt.b = std::stod(next("--b"));
         else if (arg == "--tag") opt.tag = next("--tag");
+        else if (arg == "--threads") opt.threads = std::stoul(next("--threads"));
         else if (arg == "-h" || arg == "--help") { print_usage(argv[0]); std::exit(0); }
         else { std::cerr << "error: unknown argument '" << arg << "'\n"; return false; }
     }
@@ -147,26 +152,69 @@ int main(int argc, char** argv) {
     }
     std::ostream& run = opt.output_path.empty() ? std::cout : out_file;
 
-    // 3. Score every query and emit TREC run lines.
+    // 3. Read every query up front. Queries are independent and the index is
+    //    read-only, so scoring is embarrassingly parallel — we just need them all
+    //    in hand to hand out to worker threads.
+    std::vector<std::pair<std::string, std::string>> query_list;  // (qid, qtext)
+    {
+        std::string line, qid, qtext;
+        while (std::getline(queries, line)) {
+            if (!joho::split_first_tab(line, qid, qtext)) continue;
+            query_list.emplace_back(qid, qtext);
+        }
+    }
+
+    // 4. Score in parallel. Each worker owns a BM25::Scratch (so the dense
+    //    accumulator is per-thread — no sharing, no locks on the hot path) and
+    //    pulls the next query via an atomic counter (work-stealing keeps every
+    //    core busy even though some queries are far slower than others). Results
+    //    land in a slot indexed by query position, so the run file is byte-for-byte
+    //    deterministic regardless of how the threads interleave.
     joho::BM25 bm25(*reader, opt.k1, opt.b);
+    unsigned n_threads = opt.threads ? static_cast<unsigned>(opt.threads)
+                                     : std::thread::hardware_concurrency();
+    if (n_threads == 0) n_threads = 1;
+    if (n_threads > query_list.size() && !query_list.empty())
+        n_threads = static_cast<unsigned>(query_list.size());
+    std::cerr << "Scoring " << query_list.size() << " queries on " << n_threads
+              << " thread(s)\n";
+
+    std::vector<std::vector<joho::ScoredDoc>> hits_per_query(query_list.size());
+    std::atomic<std::size_t> next_query{0};
     const auto start = std::chrono::steady_clock::now();
-    std::size_t n_queries = 0, n_lines = 0;
-    std::string line, qid, qtext;
-    while (std::getline(queries, line)) {
-        if (!joho::split_first_tab(line, qid, qtext)) continue;
-        const std::vector<joho::ScoredDoc> hits = bm25.search(qtext, opt.top_k);
+
+    auto worker = [&]() {
+        joho::BM25::Scratch scratch;  // reused across all queries this thread handles
+        for (;;) {
+            const std::size_t i = next_query.fetch_add(1, std::memory_order_relaxed);
+            if (i >= query_list.size()) break;
+            hits_per_query[i] = bm25.search(query_list[i].second, opt.top_k, scratch);
+        }
+    };
+
+    std::vector<std::thread> pool;
+    pool.reserve(n_threads);
+    for (unsigned t = 0; t < n_threads; ++t) pool.emplace_back(worker);
+    for (std::thread& t : pool) t.join();
+    const double elapsed = seconds_since(start);
+
+    // 5. Emit TREC run lines in query order.
+    std::size_t n_lines = 0;
+    for (std::size_t i = 0; i < query_list.size(); ++i) {
+        const std::string& qid = query_list[i].first;
         int rank = 1;
-        for (const joho::ScoredDoc& h : hits) {
+        for (const joho::ScoredDoc& h : hits_per_query[i]) {
             run << qid << " Q0 " << h.external_id << ' ' << rank++ << ' '
                 << h.score << ' ' << opt.tag << '\n';
             ++n_lines;
         }
-        ++n_queries;
     }
-    const double elapsed = seconds_since(start);
+
+    const std::size_t n_queries = query_list.size();
     std::cerr << "Ran " << n_queries << " queries in " << elapsed << "s ("
               << (n_queries ? elapsed * 1000.0 / static_cast<double>(n_queries) : 0.0)
-              << " ms/query); wrote " << n_lines << " run lines";
+              << " ms/query) on " << n_threads << " thread(s); wrote " << n_lines
+              << " run lines";
     if (!opt.output_path.empty()) std::cerr << " to " << opt.output_path;
     std::cerr << "\n";
     return 0;

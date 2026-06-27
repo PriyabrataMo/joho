@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace joho {
 
@@ -21,14 +21,30 @@ double BM25::idf(const std::string& term) const {
 }
 
 std::vector<ScoredDoc> BM25::search(const std::string& query, std::size_t top_k) const {
+    Scratch scratch;  // one-shot buffers for the convenience path
+    return search(query, top_k, scratch);
+}
+
+std::vector<ScoredDoc> BM25::search(const std::string& query, std::size_t top_k,
+                                    Scratch& scratch) const {
     const std::vector<std::string> terms = tokenizer_.tokenize(query);
     const double avgdl = index_.avgdl();
 
-    // Accumulate a BM25 score per document. We walk one query term at a time and
-    // add that term's contribution to every document in its posting list — this
-    // is the classic "term-at-a-time" scoring strategy.
-    std::unordered_map<uint32_t, double> scores;
-    std::vector<Posting> postings;  // reused across query terms (no per-term alloc)
+    // Dense accumulator: scores[doc_id] lives at acc[doc_id] directly, so adding a
+    // term's contribution is an array write — no hashing, no rehash/alloc as the
+    // posting lists (millions of entries for common terms) stream through. acc is
+    // sized once to num_docs and held all-zero between queries by the reset below.
+    std::vector<double>& acc = scratch.acc;
+    std::vector<uint32_t>& touched = scratch.touched;
+    std::vector<Posting>& postings = scratch.postings;
+    if (acc.size() < index_.num_docs()) acc.assign(index_.num_docs(), 0.0);
+    touched.clear();
+
+    // Term-at-a-time scoring: walk each query term's posting list and add its BM25
+    // contribution to every document that contains it. The first time a doc is
+    // scored (acc still 0) we remember it in `touched` so we can reset cheaply and
+    // so it lands in the candidate set exactly once. (Every contribution is > 0, so
+    // acc==0 is a reliable "not yet touched" test.)
     for (const std::string& term : terms) {
         const double term_idf = idf(term);
         index_.postings(term, postings);
@@ -39,13 +55,18 @@ std::vector<ScoredDoc> BM25::search(const std::string& query, std::size_t top_k)
             // BM25 term contribution:
             //   idf * ( tf * (k1 + 1) ) / ( tf + k1 * (1 - b + b * dl/avgdl) )
             const double denom = tf + k1_ * (1.0 - b_ + b_ * dl / avgdl);
-            scores[p.doc_id] += term_idf * (tf * (k1_ + 1.0)) / denom;
+            double& slot = acc[p.doc_id];
+            if (slot == 0.0) touched.push_back(p.doc_id);
+            slot += term_idf * (tf * (k1_ + 1.0)) / denom;
         }
     }
 
-    // Take the top_k documents by score (descending). partial_sort avoids fully
-    // sorting when we only need the head of the list.
-    std::vector<std::pair<uint32_t, double>> ranked(scores.begin(), scores.end());
+    // Gather the touched docs and take the top_k by score (descending). partial_sort
+    // avoids fully sorting when we only need the head of the list.
+    std::vector<std::pair<uint32_t, double>> ranked;
+    ranked.reserve(touched.size());
+    for (const uint32_t doc_id : touched) ranked.emplace_back(doc_id, acc[doc_id]);
+
     const std::size_t k = std::min(top_k, ranked.size());
     std::partial_sort(
         ranked.begin(), ranked.begin() + static_cast<std::ptrdiff_t>(k), ranked.end(),
@@ -58,6 +79,10 @@ std::vector<ScoredDoc> BM25::search(const std::string& query, std::size_t top_k)
     for (std::size_t i = 0; i < k; ++i) {
         results.push_back(ScoredDoc{index_.external_id(ranked[i].first), ranked[i].second});
     }
+
+    // Restore the invariant: acc is all-zero again, ready for the next query. We
+    // only touch the entries we actually wrote, so this is O(hits), not O(num_docs).
+    for (const uint32_t doc_id : touched) acc[doc_id] = 0.0;
     return results;
 }
 
