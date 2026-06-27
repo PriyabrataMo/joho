@@ -19,7 +19,12 @@ RUN cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build engine/build -j --target joho_server
 
 # ---- python runtime with the engine binary alongside ----
-FROM python:3.12-slim
+# Pin to bookworm to MATCH the build stage's debian:bookworm-slim. The engine binary
+# links Abseil by its SONAME, which embeds the LTS date (libabsl_*.so.20220623 on
+# bookworm). The bare python:3.12-slim tag now tracks trixie (Debian 13), whose Abseil
+# is 20240722 — so the binary fails at startup with "libabsl_synchronization.so.20220623:
+# cannot open shared object file". Same-release base => SONAMEs line up.
+FROM python:3.12-slim-bookworm
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libgrpc++1.51 libprotobuf32 ca-certificates \
@@ -27,11 +32,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /src/engine/build/joho_server /usr/local/bin/joho_server
 
 COPY gateway/requirements.txt .
-RUN pip install --no-cache-dir --index-url https://pypi.org/simple/ -r requirements.txt \
+# CPU-only torch first: this image serves on CPU (no GPU), so pulling the default CUDA
+# build would add ~7 GB of unused nvidia-* libraries. The CPU wheel satisfies the
+# `torch>=2.2` pin below, so the requirements install won't re-fetch the CUDA variant.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir --index-url https://pypi.org/simple/ -r requirements.txt \
     && pip install --no-cache-dir grpcio-tools
 COPY proto/ /app/proto/
 COPY gateway/ /app/
-RUN python -m grpc_tools.protoc --proto_path=/app/proto \
+# joho_pb/ is gitignored (generated stubs), so it is absent on a fresh clone — create it
+# before protoc, which requires its --*_out directories to already exist.
+RUN mkdir -p /app/joho_pb \
+    && python -m grpc_tools.protoc --proto_path=/app/proto \
       --python_out=/app/joho_pb --grpc_python_out=/app/joho_pb /app/proto/joho.proto \
     && touch /app/joho_pb/__init__.py \
     && sed -i 's/^import joho_pb2 as/from . import joho_pb2 as/' /app/joho_pb/joho_pb2_grpc.py
