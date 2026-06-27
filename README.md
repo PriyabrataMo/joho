@@ -61,10 +61,11 @@ batch jobs.
 
 | Phase | What | Result |
 |---|---|---|
-| P1 | C++ BM25 + eval harness | SciFact nDCG@10 **0.661** (≈ published 0.665 → impl is correct) |
+| P1 | C++ BM25 + eval harness | SciFact nDCG@10 **0.661** (≈ published 0.665); MS MARCO 8.8M MRR@10 **0.182** (≈ Anserini 0.184) |
+| P1+ | Query-path optimization | profiled at 8.8M docs → dense accumulator + parallelism = **19.8×** (1616 → 81 ms/q), byte-identical |
 | P2 | Compression + mmap | postings **~3.7×** smaller; mmap backend byte-identical, O(1) load |
 | P3 | Dense + hybrid (RRF) | SciFact dense **0.713**; NFCorpus hybrid **0.356** beats both |
-| P4 | Cross-encoder re-rank | code complete (reranker model swappable via `--model`) |
+| P4 | Cross-encoder re-rank | MS MARCO MRR@10 **0.182 → 0.356** (~2×), recall flat (hybrid EC2+M4 run) |
 | P5 | Autocomplete + spell | weighted-trie best-first top-k; SymSpell `pateint→patient` |
 | P6 | gRPC gateway + Next.js UI | browser query → ranked results + per-stage "why?" panel |
 | P7 | Sharding (scatter-gather) | 4 shards vs single = **−0.0028 nDCG@10** (local-stats cost) |
