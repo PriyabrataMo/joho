@@ -46,6 +46,8 @@ def main() -> None:
                     help="cap corpus size for quick experiments")
     ap.add_argument("--skip-export", action="store_true",
                     help="reuse existing corpus.tsv/queries.tsv in the work dir")
+    ap.add_argument("--wand", action="store_true",
+                    help="use the engine's WAND dynamic-pruning search path")
     args = ap.parse_args()
 
     engine = Path(args.engine)
@@ -77,6 +79,8 @@ def main() -> None:
            "--k1", str(args.k1),
            "--b", str(args.b),
            "--tag", args.tag]
+    if args.wand:
+        cmd.append("--wand")
     print(f"\nRunning engine:\n  {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 

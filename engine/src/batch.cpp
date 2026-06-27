@@ -52,6 +52,7 @@ struct Options {
     double b = 0.4;
     std::string tag = "joho-bm25";  // the run_tag column
     std::size_t threads = 0;        // query-scoring threads; 0 => hardware_concurrency
+    bool wand = false;              // use WAND dynamic pruning instead of full scan
 };
 
 void print_usage(const char* argv0) {
@@ -66,7 +67,8 @@ void print_usage(const char* argv0) {
         << "  --k1       F      BM25 k1                        (default: 0.9)\n"
         << "  --b        F      BM25 b                         (default: 0.4)\n"
         << "  --tag      S      run tag in the run file        (default: joho-bm25)\n"
-        << "  --threads  N      query-scoring threads          (default: all cores)\n";
+        << "  --threads  N      query-scoring threads          (default: all cores)\n"
+        << "  --wand            WAND dynamic pruning           (default: full scan)\n";
 }
 
 // Tiny hand-rolled argument parser. Each flag below expects one value after it.
@@ -89,6 +91,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
         else if (arg == "--b") opt.b = std::stod(next("--b"));
         else if (arg == "--tag") opt.tag = next("--tag");
         else if (arg == "--threads") opt.threads = std::stoul(next("--threads"));
+        else if (arg == "--wand") opt.wand = true;  // boolean flag, no value
         else if (arg == "-h" || arg == "--help") { print_usage(argv[0]); std::exit(0); }
         else { std::cerr << "error: unknown argument '" << arg << "'\n"; return false; }
     }
@@ -177,7 +180,8 @@ int main(int argc, char** argv) {
     if (n_threads > query_list.size() && !query_list.empty())
         n_threads = static_cast<unsigned>(query_list.size());
     std::cerr << "Scoring " << query_list.size() << " queries on " << n_threads
-              << " thread(s)\n";
+              << " thread(s) [" << (opt.wand ? "WAND dynamic pruning" : "exhaustive scan")
+              << ", top-k=" << opt.top_k << "]\n";
 
     std::vector<std::vector<joho::ScoredDoc>> hits_per_query(query_list.size());
     std::atomic<std::size_t> next_query{0};
@@ -188,7 +192,9 @@ int main(int argc, char** argv) {
         for (;;) {
             const std::size_t i = next_query.fetch_add(1, std::memory_order_relaxed);
             if (i >= query_list.size()) break;
-            hits_per_query[i] = bm25.search(query_list[i].second, opt.top_k, scratch);
+            hits_per_query[i] = opt.wand
+                ? bm25.search_wand(query_list[i].second, opt.top_k, scratch)
+                : bm25.search(query_list[i].second, opt.top_k, scratch);
         }
     };
 

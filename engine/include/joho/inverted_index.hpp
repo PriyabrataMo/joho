@@ -41,6 +41,15 @@ public:
     // reference into compressed bytes). Returns an empty list for unknown terms.
     const std::vector<Posting>& postings(const std::string& term) const;
 
+    // Per-term inputs for WAND's max-score upper bound: the largest tf and the
+    // smallest doc length seen across this term's postings. Because the BM25 term
+    // impact rises with tf and falls with doc length, impact(max_tf, min_len) is a
+    // valid (and reasonably tight) upper bound on the contribution this term can
+    // add to ANY single document — which is exactly what dynamic pruning needs.
+    // Maintained incrementally as documents are added (no extra build pass).
+    // Returns false for an unknown term.
+    bool term_bound(const std::string& term, uint32_t& max_tf, uint32_t& min_len) const;
+
     // The full term -> postings map. Used to serialize the index to disk
     // (disk_index.cpp).
     const std::unordered_map<std::string, std::vector<Posting>>& all_postings() const {
@@ -48,10 +57,17 @@ public:
     }
 
 private:
+    // Per-term WAND bound, kept up to date in add_document(). See term_bound().
+    struct TermBound {
+        uint32_t max_tf = 0;
+        uint32_t min_len = 0;  // valid once the term has at least one posting
+    };
+
     Tokenizer tokenizer_;
     std::vector<std::string> doc_ids_;  // internal id -> external id
     std::vector<uint32_t> doc_len_;     // internal id -> number of tokens
     std::unordered_map<std::string, std::vector<Posting>> postings_;  // term -> postings
+    std::unordered_map<std::string, TermBound> bounds_;               // term -> WAND bound
     double avgdl_ = 0.0;
 
     static const std::vector<Posting> kEmptyPostings;  // returned for unknown terms

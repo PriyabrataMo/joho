@@ -63,6 +63,7 @@ batch jobs.
 |---|---|---|
 | P1 | C++ BM25 + eval harness | SciFact nDCG@10 **0.661** (≈ published 0.665); MS MARCO 8.8M MRR@10 **0.182** (≈ Anserini 0.184) |
 | P1+ | Query-path optimization | profiled at 8.8M docs → dense accumulator + parallelism = **19.8×** (1616 → 81 ms/q), byte-identical |
+| P1++ | WAND dynamic pruning | full 8.8M MS MARCO, *on top of* the optimized scan: **3.0×** faster at top-10 (87.4 → 29.2 ms/q), **identical** MRR@10 (0.1821); win tapers to 2.1× (k=100) and 1.3× (k=1000) as expected |
 | P2 | Compression + mmap | postings **~3.7×** smaller; mmap backend byte-identical, O(1) load |
 | P3 | Dense + hybrid (RRF) | SciFact dense **0.713**; NFCorpus hybrid **0.356** beats both |
 | P4 | Cross-encoder re-rank | MS MARCO MRR@10 **0.182 → 0.356** (~2×), recall flat (hybrid EC2+M4 run) |
@@ -95,6 +96,10 @@ Key components and their rationale:
 - **C++ retrieval core** — inverted index with delta+varint posting compression and an
   `mmap`-backed on-disk reader behind a single `IndexReader` interface, so BM25 scores RAM
   or disk identically.
+- **WAND dynamic pruning** — document-at-a-time retrieval that uses per-term max-score upper
+  bounds to skip documents that provably cannot enter the top-k. Verified lossless against an
+  exhaustive scan on the full 8.8M-passage corpus (identical MRR@10/nDCG@10), with the speedup
+  growing as k shrinks — the expected behaviour, measured rather than assumed.
 - **Hybrid retrieval funnel** — BM25 (lexical) + dense embeddings (BGE-small, FAISS HNSW)
   fused with Reciprocal Rank Fusion, then a cross-encoder reranker on the top candidates.
 - **Autocomplete & spell-correct** — a weighted trie with best-first (branch-and-bound)

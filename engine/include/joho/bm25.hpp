@@ -55,6 +55,20 @@ public:
     std::vector<ScoredDoc> search(const std::string& query, std::size_t top_k,
                                   Scratch& scratch) const;
 
+    // WAND (Weak AND) dynamic-pruning search. Returns the same top-k as search()
+    // — identical IR metrics — but skips documents that provably cannot enter the
+    // top-k, using a per-term max-score upper bound (impact(max_tf, min_len)).
+    //
+    // The win GROWS as top_k shrinks: a smaller k keeps a higher score threshold,
+    // which prunes more aggressively. At large top_k the threshold is permissive
+    // and WAND degrades toward (and, against our cache-friendly dense scan, can
+    // fall behind) a full scan — an honest, k-dependent trade-off.
+    //
+    // Requires an InvertedIndex (for zero-copy postings + the precomputed per-term
+    // bounds). For any other IndexReader it transparently falls back to search().
+    std::vector<ScoredDoc> search_wand(const std::string& query, std::size_t top_k,
+                                       Scratch& scratch) const;
+
 private:
     double idf(const std::string& term) const;
 
